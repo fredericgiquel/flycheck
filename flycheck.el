@@ -7474,8 +7474,12 @@ See URL `https://ansible-lint.readthedocs.io/en/latest/'."
   :command ("ansible-lint" "--nocolor" "-p" source)
   :error-patterns
   ((error "CRITICAL Couldn't parse task at " (file-name) ":" line " " (message))
+   ;; ansible-lint v4 output
    (warning line-start (file-name) ":" line ": [E" (id (+ digit)) "] " (message)
-            line-end))
+            line-end)
+   ;; ansible-lint v5 output
+   (warning line-start (file-name) ":" line (optional ":" column) ": "
+            (id (+ (any "a-z-"))) " " (message) line-end))
   :error-explainer
   (lambda (err)
     (let* ((id (flycheck-error-id err))
@@ -7488,7 +7492,7 @@ See URL `https://ansible-lint.readthedocs.io/en/latest/'."
                           (string-prefix-p id elt)))))
            (next-id (car (seq-filter
                           (lambda (elt)
-                            (string-match-p "^[0-9]\\{3,4\\}: " elt))
+                            (string-match-p "^[0-9a-z-]+: " elt))
                           (nthcdr start lines))))
            (end (if (not next-id)
                     (length lines)
