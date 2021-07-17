@@ -2053,6 +2053,17 @@ are mandatory.
        be found online at URL.
      - nil if there is no explanation for this error.
 
+     If URL is provided by the checker, and cannot be composed
+     from other elements in the `flycheck-error' object, consider
+     passing the URL via text properties:
+
+       ;; During the error object creation
+       (put-text-property 0 1 'explainer-url .url .check_id)
+
+       ;; In the error-explainer FUNCTION
+       (let ((id (flycheck-error-id err)))
+         (and id `(url . ,(get-text-property 0 'explainer-url id))))
+
      This property is optional.
 
 `:next-checkers NEXT-CHECKERS'
@@ -3807,7 +3818,7 @@ the THING at the column, and END the end of the THING."
             (`symbols
              ;; Ensure that we're on a word or symbol.  See
              ;; https://github.com/flycheck/flycheck/issues/1519
-             (and (< beg (point-max))
+             (and (<= (point-min) beg) (< beg (point-max))
                   (memq (char-syntax (char-after beg)) '(?w ?_))
                   (flycheck-bounds-of-thing-at-point 'symbol beg)))
             (`sexps
@@ -8433,15 +8444,21 @@ Requires DMD 2.066 or newer.  See URL `https://dlang.org/'."
   "A Dockerfile syntax checker using the hadolint.
 
 See URL `http://github.com/hadolint/hadolint/'."
-  :command ("hadolint" "-")
+  :command ("hadolint" "--no-color" "-")
   :standard-input t
   :error-patterns
   ((error line-start
-          (file-name) ":" line ":" column " " (message)
+          (file-name) ":" line " " (id (one-or-more alnum)) " error: " (message)
           line-end)
    (warning line-start
-            (file-name) ":" line " " (id (one-or-more alnum)) " " (message)
-            line-end))
+            (file-name) ":" line " " (id (one-or-more alnum))
+            " warning: " (message) line-end)
+   (info line-start
+         (file-name) ":" line " " (id (one-or-more alnum)) " info: " (message)
+         line-end)
+   (error line-start
+          (file-name) ":" line ":" column " " (message)
+          line-end))
   :error-filter
   (lambda (errors)
     (flycheck-sanitize-errors
@@ -8637,7 +8654,7 @@ This variable has no effect, if
         (setq flycheck-emacs-lisp-check-declare ,value)))))
 
 (defun flycheck--emacs-lisp-enabled-p ()
-  "Check whether to enable Emacs Lisp checkers in the current buffer."
+  "Check whether to enable Emacs Lisp checker in the current buffer."
   (not
    (or
     ;; Do not check buffers used for autoloads generation during package
@@ -8653,6 +8670,12 @@ This variable has no effect, if
     (and (buffer-file-name)
          (member (file-name-nondirectory (buffer-file-name))
                  '("Cask" "Carton" ".dir-locals.el" ".dir-locals-2.el"))))))
+
+(defun flycheck--emacs-lisp-checkdoc-enabled-p ()
+  "Check whether to enable Emacs Lisp Checkdoc in the current buffer."
+  (and (flycheck--emacs-lisp-enabled-p)
+       ;; These files are valid Lisp, but don't contain "standard" comments.
+       (not (member (buffer-file-name) '("Eldev" "Eldev-local")))))
 
 (flycheck-define-checker emacs-lisp
   "An Emacs Lisp syntax checker using the Emacs Lisp Byte compiler.
@@ -8773,7 +8796,7 @@ The checker runs `checkdoc-current-buffer'."
   :error-patterns
   ((info line-start (file-name) ":" line ": " (message) line-end))
   :modes (emacs-lisp-mode)
-  :enabled flycheck--emacs-lisp-enabled-p)
+  :enabled flycheck--emacs-lisp-checkdoc-enabled-p)
 
 (dolist (checker '(emacs-lisp emacs-lisp-checkdoc))
   (setf (car (flycheck-checker-get checker 'command))
@@ -10956,7 +10979,7 @@ See URL `https://git.io/vhi2t'."
 See URL `https://github.com/markdownlint/markdownlint'."
   :command ("mdl"
             (config-file "--style" flycheck-markdown-mdl-style)
-            (option "--tags=" flycheck-markdown-mdl-rules concat
+            (option "--tags=" flycheck-markdown-mdl-tags concat
                     flycheck-option-comma-separated-list)
             (option "--rules=" flycheck-markdown-mdl-rules concat
                     flycheck-option-comma-separated-list))
@@ -10979,6 +11002,10 @@ See URL `https://nixos.org/nix/manual/#sec-nix-instantiate'."
   :standard-input t
   :error-patterns
   ((error line-start
+          "error: " (message)
+          (one-or-more "\n")
+          (zero-or-more space) "at «stdin»:" line ":" column ":" line-end)
+   (error line-start
           "at: (" line ":" column ") from stdin"
           (one-or-more "\n" (zero-or-more space (one-or-more not-newline)))
           (message) line-end)
@@ -12396,9 +12423,14 @@ See URL `https://github.com/nodeca/js-yaml'."
   ((error line-start
           (or "JS-YAML" "YAMLException") ": "
           (message) " at line " line ", column " column ":"
+          line-end)
+   (error line-start
+          (or "JS-YAML" "YAMLException") ": "
+          (message) " (" line ":" column ")"
           line-end))
   :modes yaml-mode
-  :next-checkers ((warning . cwl)))
+  :next-checkers ((warning . yaml-yamllint)
+                  (warning . cwl)))
 
 (flycheck-define-checker yaml-ruby
   "A YAML syntax checker using Ruby's YAML parser.
@@ -12417,7 +12449,8 @@ See URL `http://www.ruby-doc.org/stdlib-2.0.0/libdoc/yaml/rdoc/YAML.html'."
   ((error line-start "stdin:" (zero-or-more not-newline) ":" (message)
           "at line " line " column " column line-end))
   :modes yaml-mode
-  :next-checkers ((warning . cwl)))
+  :next-checkers ((warning . yaml-yamllint)
+                  (warning . cwl)))
 
 (flycheck-def-config-file-var flycheck-yamllintrc yaml-yamllint ".yamllint")
 
@@ -12432,7 +12465,8 @@ See URL `https://github.com/adrienverge/yamllint'."
           "stdin:" line ":" column ": [error] " (message) line-end)
    (warning line-start
             "stdin:" line ":" column ": [warning] " (message) line-end))
-  :modes yaml-mode)
+  :modes yaml-mode
+  :next-checkers ((warning . cwl)))
 
 (provide 'flycheck)
 
