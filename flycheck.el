@@ -168,6 +168,7 @@ attention to case differences."
 
 (defcustom flycheck-checkers
   '(ada-gnat
+    ansible-ansiblelint
     asciidoctor
     asciidoc
     awk-gawk
@@ -7474,6 +7475,51 @@ Uses the GNAT compiler from GCC.  See URL
    (error line-start (file-name) ":" line ":" column
           ": " (message) line-end))
   :modes ada-mode)
+
+(flycheck-define-checker ansible-ansiblelint
+  "An Ansible linter using the ansible-lint tool.
+
+See URL `https://ansible-lint.readthedocs.io/en/latest/'."
+  ;; emacs-ansible provides ansible, not ansible-mode
+  :enabled (lambda () (bound-and-true-p ansible))
+  :command ("ansible-lint" "--nocolor" "-p" source-original)
+  :predicate flycheck-buffer-saved-p
+  :error-patterns
+  ;; ansible-lint v4 output
+  ((error "CRITICAL Couldn't parse task at " (file-name) ":" line " " (message))
+   (warning line-start (file-name) ":" line ": [E" (id (+ digit)) "] " (message)
+            line-end)
+   ;; ansible-lint v5 output
+   (error line-start (file-name) ":" line (optional ":" column) ": "
+          (id (or "syntax-check" "internal-error" "parser-error" "load-failure"))
+          " " (message) line-end)
+   (warning line-start (file-name) ":" line (optional ":" column) ": "
+            (id (+ (any "a-z-"))) " " (message) line-end))
+  :error-explainer
+  (lambda (err)
+    (let* ((id (flycheck-error-id err))
+           (lines (process-lines "ansible-lint" "-L" "-f" "plain"))
+           ;; process-lines may flush output before the entire line of the rule
+           ;; is ready; reconstruct the desired error to a single line
+           (start (+ 1 (seq-position
+                        lines t
+                        (lambda (elt _)
+                          (string-prefix-p id elt)))))
+           (next-id (car (seq-filter
+                          (lambda (elt)
+                            (string-match-p "^[0-9a-z-]+: " elt))
+                          (nthcdr start lines))))
+           (end (if (not next-id)
+                    (length lines)
+                  (seq-position
+                   lines t
+                   (lambda (elt _)
+                     (string-prefix-p next-id elt))))))
+      (substring (mapconcat 'identity (seq-subseq lines start end) " ") 2)))
+  :modes yaml-mode
+  :next-checkers ((t . yaml-jsyaml)
+                  (t . yaml-ruby)
+                  (t . yaml-yamllint)))
 
 (flycheck-define-checker asciidoc
   "A AsciiDoc syntax checker using the AsciiDoc compiler.
